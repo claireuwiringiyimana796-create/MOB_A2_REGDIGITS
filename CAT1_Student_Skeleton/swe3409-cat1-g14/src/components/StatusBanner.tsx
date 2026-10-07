@@ -16,15 +16,59 @@
  * Check on the phone: API running -> "Server OK". Stop the API, press
  * "Check again" -> the offline message.
  */
-import { Text, View } from 'react-native';
+import { useEffect, useState } from "react";
+import { Button, Text, View } from "react-native";
+import { checkHealth } from "../health";
 
 type Props = { apiUrl: string };
 
 export default function StatusBanner({ apiUrl }: Props) {
-  // TODO M5: replace this placeholder (and delete this line) with the real banner.
+  const [status, setStatus] = useState<"checking" | "ok" | "offline">(
+    "checking",
+  );
+  async function check() {
+    setStatus("checking");
+    try {
+      setStatus(await checkHealth(apiUrl));
+    } catch (error) {
+      setStatus("offline");
+    }
+  }
+  useEffect(() => {
+    check();
+  }, []);
+
   return (
-    <View>
-      <Text>TODO M5: server status for {apiUrl}</Text>
+    <View
+      style={{
+        borderRadius: 10,
+        margin: 10,
+        backgroundColor:
+          status === "checking"
+            ? "rgb(194, 194, 14)"
+            : status === "offline"
+              ? "#df6666"
+              : "green",
+      }}
+    >
+      {status === "checking" ? (
+        <Text style={{ padding: 10, fontWeight: 700 }}>Checking server...</Text>
+      ) : status === "offline" ? (
+        <View
+          style={{
+            margin: 10,
+            display: "flex",
+            justifyContent: "space-between",
+          }}
+        >
+          <Text style={{ padding: 10, fontWeight: 700 }}>
+            Offline: deliveries stay on this phone
+          </Text>
+          <Button title="Check again" onPress={check} />
+        </View>
+      ) : (
+        <Text>Server ok</Text>
+      )}
     </View>
   );
 }
