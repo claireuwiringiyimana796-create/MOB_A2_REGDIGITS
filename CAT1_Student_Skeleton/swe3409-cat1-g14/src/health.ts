@@ -23,7 +23,19 @@
  *           return body.status === 'ok' ? 'ok' : 'offline'; }
  *     catch { return 'offline'; }
  *     finally { clearTimeout(timer); } */
-export async function checkHealth(baseUrl: string, timeoutMs = 5000): Promise<'ok' | 'offline'> {
-  // TODO M5: write this, then delete this TODO line.
-  throw new Error('M5 checkHealth is not written yet');
+export async function checkHealth(
+  baseUrl: string,
+  timeoutMs = 5000,
+): Promise<"ok" | "offline"> {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    const res = await fetch(`${baseUrl}/health`, { signal: ctrl.signal });
+    const body = await res.json();
+    return body.status === "ok" ? "ok" : "offline";
+  } catch {
+    return "offline";
+  } finally {
+    clearTimeout(timer);
+  }
 }
