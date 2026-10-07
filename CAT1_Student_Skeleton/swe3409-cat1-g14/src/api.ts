@@ -1,41 +1,173 @@
-/**
- * M4 · MEMBER 2 · Talk to the group's Python API  (also App.tsx and src/config.ts)
- *
- * Owner (your GitHub username): @
- * Your AI task in the swe3513-cat1 repository: A2 (stats.py)
- *
- * WHAT MEMBER 2 DOES HERE
- * You are the mobile integrator. First write the two functions below (their
- * tests use a fake server, so you can start at once). Then, when Members 1, 3
- * and 4 have merged, finish App.tsx so a saved delivery gets its risk from the
- * API and is sent to it, put the laptop address in src/config.ts, run the app
- * on a phone and push the screenshot docs/screenshot.png.
- *
- * Rule for both functions: never throw, and give up after timeoutMs.
- *   const ctrl = new AbortController();
- *   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
- *   try { ... fetch(url, { signal: ctrl.signal }) ... }
- *   catch { return <the "failed" value>; }
- *   finally { clearTimeout(timer); }
- *
- * Done means: npm run test:api -> 6 pass; App.tsx has no "TODO M4"; docs/screenshot.png pushed.
- */
-import type { NewDelivery } from './logic';
+// src/api.ts
+//
+// All network calls from the app go through this file.
+//
+// Two styles of functions live here on purpose:
+//   - getRisk / sendDelivery: the shape the lecturer's tests use.
+//   - sendMilkDeliveryAssessment / sendChatMessage: the shape the existing
+//     screens (MilkDeliveryScreen, ChatScreen) already call.
+//
+// The second pair is implemented so there is only one place that knows how to
+// talk to the network.
 
-/** GET {baseUrl}/risk?temp_c=<tempC>&hours=<hours>
- *  If res.ok: read the JSON and return { risk: body.risk, label: body.label }.
- *  If the answer is not ok, the network fails or the time runs out: return null. */
+import { API_URL } from './config.ts';
+
+/* ────────────────────────────────────────────────────────────────────────────
+ * Test-shaped functions (M4)
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+/** Default timeout for a request, in milliseconds. */
+const DEFAULT_TIMEOUT_MS = 4000;
+
+/**
+ * Ask the Python API for a rejection risk.
+ *
+ * GET /risk?temp_c=<tempC>&hours=<hours>
+ * Returns { risk, label } when the server answers, or null when it does not.
+ *
+ * The function never throws. Offline, bad server, timeout → null.
+ * That is on purpose: the phone must keep working when the network is down.
+ */
 export async function getRisk(
-  baseUrl: string, tempC: number, hours: number, timeoutMs = 5000,
+  base: string,
+  tempC: number,
+  hours: number,
+  timeoutMs: number = DEFAULT_TIMEOUT_MS,
 ): Promise<{ risk: number; label: string } | null> {
-  // TODO M4: write this, then delete this TODO line.
-  throw new Error('M4 getRisk is not written yet');
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const url = `${base}/risk?temp_c=${encodeURIComponent(tempC)}&hours=${encodeURIComponent(hours)}`;
+    const res = await fetch(url, { signal: controller.signal });
+    if (!res.ok) return null;
+
+    const data = await res.json();
+    if (typeof data?.risk !== 'number' || typeof data?.label !== 'string') {
+      return null;
+    }
+    return { risk: data.risk, label: data.label };
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
-/** POST {baseUrl}/deliveries with JSON in the Python names (snake_case):
- *    { farmer_id: d.farmerId, litres: d.litres, temp_c: d.tempC, hours: d.hours }
- *  headers: { 'Content-Type': 'application/json' }.  Return res.ok (true/false); false on any error. */
-export async function sendDelivery(baseUrl: string, d: NewDelivery, timeoutMs = 5000): Promise<boolean> {
-  // TODO M4: write this, then delete this TODO line.
-  throw new Error('M4 sendDelivery is not written yet');
+/**
+ * Send a delivery to the Python API.
+ *
+ * POST /deliveries  body: { farmer_id, litres, temp_c, hours }
+ * Returns true when the server accepted (200), false otherwise.
+ *
+ * The keys are snake_case on the wire because the FastAPI model expects them.
+ */
+export async function sendDelivery(
+  base: string,
+  delivery: { farmerId: string; litres: number; tempC: number; hours: number },
+  timeoutMs: number = DEFAULT_TIMEOUT_MS,
+): Promise<boolean> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const res = await fetch(`${base}/deliveries`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      signal: controller.signal,
+      body: JSON.stringify({
+        farmer_id: delivery.farmerId,
+        litres: delivery.litres,
+        temp_c: delivery.tempC,
+        hours: delivery.hours,
+      }),
+    });
+    return res.ok;
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/* ────────────────────────────────────────────────────────────────────────────
+ * Screen-shaped functions (what the existing screens call)
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+/**
+ * Used by MilkDeliveryScreen.
+ *
+ * Sends the delivery to the API and returns a result object that the screen
+ * already knows how to display.
+ *
+ * When the API is unreachable, this returns a result with
+ * `risk_probability: null` and a clear message. It does NOT invent a risk.
+ * A collector must never see a made-up safety number.
+ */
+export async function sendMilkDeliveryAssessment(data: {
+  farmer_id: string;
+  litres: number;
+  temperature: number;
+  hours_since_milking: number;
+}): Promise<{
+  farmer_id: string;
+  litres: number;
+  risk_probability: number | null;
+  label: 'Low' | 'Medium' | 'High' | 'Not checked';
+  recommendation: string;
+}> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), DEFAULT_TIMEOUT_MS);
+
+  try {
+    const res = await fetch(`${API_URL}/predict`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      signal: controller.signal,
+      body: JSON.stringify(data),
+    });
+
+    if (!res.ok) throw new Error(`Server error: ${res.status}`);
+    return await res.json();
+  } catch {
+    // Offline: keep the delivery on the phone. Do not invent a risk.
+    return {
+      farmer_id: data.farmer_id,
+      litres: data.litres,
+      risk_probability: null,
+      label: 'Not checked',
+      recommendation:
+        'Saved on this phone. The API was not reachable, so the risk could not be checked. Send it again when the network is back.',
+    };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * Used by ChatScreen.
+ *
+ * Sends a message to the API. If the API is unreachable, returns a short
+ * offline notice instead of a fake answer.
+ */
+export async function sendChatMessage(message: string): Promise<string> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), DEFAULT_TIMEOUT_MS);
+
+  try {
+    const res = await fetch(`${API_URL}/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      signal: controller.signal,
+      body: JSON.stringify({ message }),
+    });
+    if (!res.ok) throw new Error('Chat backend unresponsive');
+
+    const data = await res.json();
+    return data.reply;
+  } catch {
+    return 'Offline: the AI assistant is not reachable right now. Check that the laptop is running the API and the phone is on the same Wi-Fi.';
+  } finally {
+    clearTimeout(timer);
+  }
 }
